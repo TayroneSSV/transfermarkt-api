@@ -1,0 +1,11 @@
+.git
+.gitignore
+.gcloudignore
+
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
