@@ -10,3 +10,9 @@ router = APIRouter()
 def get_player_performance(tm_id: str):
     service = TransfermarktV2PlayerPerformance(tm_id=tm_id)
     return service.get_performance()
+
+
+@router.get("/{tm_id}/performance-debug")
+def get_player_performance_debug(tm_id: str):
+    service = TransfermarktV2PlayerPerformance(tm_id=tm_id)
+    return service.get_debug()
