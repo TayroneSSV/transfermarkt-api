@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class V2PlayerPerformanceRow(BaseModel):
+    season_id: Optional[str] = None
     season_name: Optional[str] = None
     competition_id: Optional[str] = None
     competition_name: Optional[str] = None
