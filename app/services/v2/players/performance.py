@@ -1,11 +1,46 @@
-from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
 from app.services.v2.core.client import TransfermarktV2Client
-from app.services.v2.core.urls import player_performance_ceapi_url, player_performance_url
+from app.services.v2.core.urls import player_performance_ceapi_url
+
+
+COMPETITION_NAME_BY_ID = {
+    "L1": "Bundesliga",
+    "L2": "2. Bundesliga",
+    "L3": "3. Liga",
+    "DFB": "DFB-Pokal",
+    "RLB3": "Regionalliga Bayern",
+    "RLN3": "Regionalliga Nord",
+    "RLW3": "Regionalliga West",
+    "RLSW": "Regionalliga Südwest",
+    "A1": "Austrian Bundesliga",
+    "A2": "Austrian 2. Liga",
+    "C2": "Challenge League",
+    "ES1": "LaLiga",
+    "GB1": "Premier League",
+    "IT1": "Serie A",
+    "FR1": "Ligue 1",
+    "NL1": "Eredivisie",
+    "BE1": "Jupiler Pro League",
+    "PO1": "Liga Portugal",
+    "TR1": "Süper Lig",
+    "SC1": "Scottish Premiership",
+    "SC2": "Scottish Championship",
+    "IR1": "League of Ireland Premier Division",
+    "IR2": "League of Ireland First Division",
+    "CL": "UEFA Champions League",
+    "EL": "UEFA Europa League",
+    "UCOL": "UEFA Conference League",
+    "ECLQ": "UEFA Conference League Qualifiers",
+    "DFBJ": "DFB-Pokal der Junioren",
+    "19YL": "UEFA Youth League",
+    "U21Q": "UEFA European Under-21 Championship Qualifying",
+    "U19Q": "UEFA European Under-19 Championship Qualifying",
+    "FS": "Friendlies",
+}
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -35,7 +70,6 @@ def _season_name_from_id(season_id: Optional[Any]) -> Optional[str]:
     season_int = _as_int(season_id, default=-1)
     if season_int < 0:
         return _as_str(season_id)
-    # Normal European season representation. Calendar-year leagues still keep raw season_id.
     return f"{str(season_int)[-2:]}/{str(season_int + 1)[-2:]}"
 
 
@@ -76,10 +110,16 @@ def _extract_competition_name(game_info: Dict[str, Any]) -> Optional[str]:
             "competition_name",
             "competitionGroupName",
             "competitionGroup",
-            "competitionId",
         ],
     )
-    return _as_str(value)
+    text = _as_str(value)
+    if text:
+        return text
+
+    competition_id = _as_str(game_info.get("competitionId"))
+    if not competition_id:
+        return None
+    return COMPETITION_NAME_BY_ID.get(competition_id, competition_id)
 
 
 def _read_card_stat(card_stats: Dict[str, Any], keys: List[str]) -> int:
@@ -108,12 +148,12 @@ def _parse_appearance(perf: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     club = clubs_info.get("club") or {}
     opponent = clubs_info.get("opponent") or {}
 
-    season_id = game_info.get("seasonId")
+    season_id = _as_str(game_info.get("seasonId"))
     competition_id = _as_str(game_info.get("competitionId"))
     club_id = _as_str(club.get("clubId"))
 
     return {
-        "season_id": _as_str(season_id),
+        "season_id": season_id,
         "season_name": _season_name_from_id(season_id),
         "competition_id": competition_id,
         "competition_name": _extract_competition_name(game_info),
@@ -138,9 +178,11 @@ def _parse_appearance(perf: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ),
         "red_cards": _read_card_stat(card_stats, ["redCard", "redCards"]),
         "raw_cells": {
-            "gameInformation": game_info,
-            "clubsInformation": clubs_info,
-            "statistics": statistics,
+            "game_id": _as_str(game_info.get("gameId")),
+            "matchday": game_info.get("gameDay"),
+            "date": ((game_info.get("date") or {}).get("dateTimeUTC")),
+            "opponent_club_id": _as_str(opponent.get("clubId")),
+            "opponent_club_name": _extract_club_name(opponent),
         },
     }
 
@@ -152,6 +194,7 @@ def _aggregate_appearances(appearances: List[Dict[str, Any]]) -> List[Dict[str, 
         key = (row.get("season_id"), row.get("competition_id"), row.get("club_id"))
         if key not in grouped:
             grouped[key] = {
+                "season_id": row.get("season_id"),
                 "season_name": row.get("season_name"),
                 "competition_id": row.get("competition_id"),
                 "competition_name": row.get("competition_name"),
@@ -168,7 +211,6 @@ def _aggregate_appearances(appearances: List[Dict[str, Any]]) -> List[Dict[str, 
                 "second_yellow_cards": 0,
                 "red_cards": 0,
                 "raw_cells": {
-                    "season_id": row.get("season_id"),
                     "source": "ceapi/performance-game aggregated",
                     "game_ids": [],
                 },
@@ -190,7 +232,7 @@ def _aggregate_appearances(appearances: List[Dict[str, Any]]) -> List[Dict[str, 
             target["raw_cells"]["game_ids"].append(row.get("game_id"))
 
     def sort_key(item: Dict[str, Any]):
-        season_raw = _as_int((item.get("raw_cells") or {}).get("season_id"), default=-1)
+        season_raw = _as_int(item.get("season_id"), default=-1)
         return (season_raw, item.get("competition_id") or "", item.get("club_id") or "")
 
     return sorted(grouped.values(), key=sort_key, reverse=True)
@@ -200,11 +242,10 @@ class TransfermarktV2PlayerPerformance:
     def __init__(self, tm_id: str, client: Optional[TransfermarktV2Client] = None):
         self.tm_id = tm_id
         self.client = client or TransfermarktV2Client()
-        self.source_url = player_performance_url(tm_id)
-        self.ceapi_url = player_performance_ceapi_url(tm_id)
+        self.source_url = player_performance_ceapi_url(tm_id)
 
     def _load_ceapi_payload(self) -> Dict[str, Any]:
-        response = self.client.get(self.ceapi_url)
+        response = self.client.get(self.source_url)
         try:
             payload = response.json()
         except ValueError as exc:
@@ -212,7 +253,7 @@ class TransfermarktV2PlayerPerformance:
                 status_code=502,
                 detail={
                     "message": "Transfermarkt CEAPI returned non-JSON response",
-                    "source_url": self.ceapi_url,
+                    "source_url": self.source_url,
                     "error": str(exc),
                     "preview": response.text[:500],
                 },
@@ -221,16 +262,20 @@ class TransfermarktV2PlayerPerformance:
         if not isinstance(payload, dict):
             raise HTTPException(
                 status_code=502,
-                detail={"message": "Transfermarkt CEAPI returned invalid payload", "source_url": self.ceapi_url},
+                detail={"message": "Transfermarkt CEAPI returned invalid payload", "source_url": self.source_url},
             )
         if payload.get("success") is False:
             raise HTTPException(
                 status_code=404,
-                detail={"message": "Transfermarkt CEAPI success=false", "source_url": self.ceapi_url, "payload": payload},
+                detail={
+                    "message": "Transfermarkt CEAPI success=false",
+                    "source_url": self.source_url,
+                    "payload": payload,
+                },
             )
         return payload
 
-    def _parse_payload(self, payload: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def _parse_payload(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         raw_performances = ((payload.get("data") or {}).get("performance") or [])
         appearances: List[Dict[str, Any]] = []
         for perf in raw_performances:
@@ -239,36 +284,15 @@ class TransfermarktV2PlayerPerformance:
             parsed = _parse_appearance(perf)
             if parsed:
                 appearances.append(parsed)
-        return appearances, _aggregate_appearances(appearances)
+        return _aggregate_appearances(appearances)
 
     def get_performance(self) -> dict:
         payload = self._load_ceapi_payload()
-        appearances, performance_stats = self._parse_payload(payload)
+        performance_stats = self._parse_payload(payload)
 
         return {
             "tm_id": self.tm_id,
-            "source_url": self.ceapi_url,
+            "source_url": self.source_url,
             "loaded_at": datetime.now(),
             "performance_stats": performance_stats,
-        }
-
-    def get_debug(self) -> dict:
-        payload = self._load_ceapi_payload()
-        appearances, performance_stats = self._parse_payload(payload)
-        raw_performances = ((payload.get("data") or {}).get("performance") or [])
-
-        return {
-            "tm_id": self.tm_id,
-            "source_url": self.ceapi_url,
-            "loaded_at": datetime.now(),
-            "debug": {
-                "method": "ceapi/performance-game",
-                "success": payload.get("success"),
-                "raw_performance_count": len(raw_performances),
-                "parsed_appearance_count": len(appearances),
-                "aggregated_row_count": len(performance_stats),
-                "first_raw_keys": list(raw_performances[0].keys()) if raw_performances else [],
-                "first_parsed_appearance": appearances[0] if appearances else None,
-                "first_aggregated_row": performance_stats[0] if performance_stats else None,
-            },
         }
