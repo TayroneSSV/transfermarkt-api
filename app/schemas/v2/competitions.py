@@ -9,6 +9,8 @@ from app.schemas.v2.players import V2PlayerPerformanceRow
 class V2CompetitionRosterClub(BaseModel):
     id: str
     name: Optional[str] = None
+    source_url: Optional[str] = None
+    roster_url: Optional[str] = None
     player_count: int = 0
     error: Optional[str] = None
 
@@ -46,6 +48,7 @@ class V2CompetitionRosterResponse(BaseModel):
     competition_name: Optional[str] = None
     season_id: Optional[str] = None
     season_name: Optional[str] = None
+    source_url: Optional[str] = None
     loaded_at: datetime = Field(default_factory=datetime.now)
     include_performance: bool = True
     club_count: int = 0
