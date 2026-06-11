@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import List, Optional
+
+from fastapi import HTTPException
 
 from app.services.base import TransfermarktBase
 from app.utils.regex import REGEX_DOB
@@ -6,45 +9,66 @@ from app.utils.utils import extract_from_url, safe_regex
 from app.utils.xpath import Clubs
 
 
+def _club_roster_url_candidates(club_id: Optional[str], season_id: Optional[str]) -> List[str]:
+    club_id = str(club_id or "").strip()
+    season_id = str(season_id or "").strip() or None
+
+    urls: List[str] = []
+    if season_id:
+        urls.append(f"https://www.transfermarkt.com/-/kader/verein/{club_id}/saison_id/{season_id}/plus/1")
+        urls.append(f"https://www.transfermarkt.com/-/kader/verein/{club_id}/plus/1/galerie/0?saison_id={season_id}")
+        urls.append(f"https://www.transfermarkt.com/-/kader/verein/{club_id}/saison_id/{season_id}")
+
+    urls.append(f"https://www.transfermarkt.com/-/kader/verein/{club_id}/plus/1")
+    urls.append(f"https://www.transfermarkt.com/-/kader/verein/{club_id}")
+
+    deduped: List[str] = []
+    for url in urls:
+        if url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
 @dataclass
 class TransfermarktClubPlayers(TransfermarktBase):
-    """
-    A class for retrieving and parsing the players of a football club from Transfermarkt.
-
-    Args:
-        club_id (str): The unique identifier of the football club.
-        season_id (str): The unique identifier of the season.
-        URL (str): The URL template for the club's players page on Transfermarkt.
-    """
-
     club_id: str = None
     season_id: str = None
     URL: str = "https://www.transfermarkt.com/-/kader/verein/{club_id}/saison_id/{season_id}/plus/1"
 
     def __post_init__(self) -> None:
-        """Initialize the TransfermarktClubPlayers class."""
-        self.URL = self.URL.format(club_id=self.club_id, season_id=self.season_id)
-        self.page = self.request_url_page()
-        self.raise_exception_if_not_found(xpath=Clubs.Players.CLUB_NAME)
-        self.__update_season_id()
-        self.__update_past_flag()
+        errors: List[str] = []
+        for candidate_url in _club_roster_url_candidates(self.club_id, self.season_id):
+            self.URL = candidate_url
+            try:
+                self.page = self.request_url_page()
+                if self.get_text_by_xpath(Clubs.Players.CLUB_NAME):
+                    self.__update_season_id()
+                    self.__update_past_flag()
+                    return
+                errors.append(f"no club name at {candidate_url}")
+            except HTTPException as exc:
+                errors.append(str(exc.detail))
+                continue
+
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Could not load club roster from Transfermarkt",
+                "club_id": self.club_id,
+                "season_id": self.season_id,
+                "attempted_urls": _club_roster_url_candidates(self.club_id, self.season_id),
+                "errors": errors[-5:],
+            },
+        )
 
     def __update_season_id(self):
-        """Update the season ID if it's not provided by extracting it from the website."""
         if self.season_id is None:
             self.season_id = extract_from_url(self.get_text_by_xpath(Clubs.Players.CLUB_URL), "season_id")
 
     def __update_past_flag(self) -> None:
-        """Check if the season is the current or if it's a past one and update the flag accordingly."""
         self.past = "Current club" in self.get_list_by_xpath(Clubs.Players.PAST_FLAG)
 
     def __parse_club_players(self) -> list[dict]:
-        """
-        Parse player information from the webpage and return a list of dictionaries, each representing a player.
-
-        Returns:
-            list[dict]: A list of player information dictionaries.
-        """
         page_nationalities = self.page.xpath(Clubs.Players.PAGE_NATIONALITIES)
         page_players_infos = self.page.xpath(Clubs.Players.PAGE_INFOS)
         page_players_signed_from = self.page.xpath(
@@ -100,7 +124,7 @@ class TransfermarktClubPlayers(TransfermarktBase):
                 "marketValue": market_value,
                 "status": status,
             }
-            for idx, name, position, dob, age, nationality, current_club, height, foot, joined_on, joined, signed_from, contract, market_value, status, in zip(  # noqa: E501
+            for idx, name, position, dob, age, nationality, current_club, height, foot, joined_on, joined, signed_from, contract, market_value, status in zip(
                 players_ids,
                 players_names,
                 players_positions,
@@ -120,14 +144,7 @@ class TransfermarktClubPlayers(TransfermarktBase):
         ]
 
     def get_club_players(self) -> dict:
-        """
-        Retrieve and parse player information for the specified football club.
-
-        Returns:
-            dict: A dictionary containing the club's unique identifier, player information, and the timestamp of when
-                  the data was last updated.
-        """
         self.response["id"] = self.club_id
+        self.response["source_url"] = self.URL
         self.response["players"] = self.__parse_club_players()
-
         return self.response
