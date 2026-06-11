@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,7 +20,7 @@ class V2CompetitionRosterPlayer(BaseModel):
     position: Optional[str] = None
     date_of_birth: Optional[Any] = None
     age: Optional[Any] = None
-    nationality: list[Any] = Field(default_factory=list)
+    nationality: List[Any] = Field(default_factory=list)
     height: Optional[Any] = None
     foot: Optional[str] = None
     joined_on: Optional[Any] = None
@@ -36,9 +36,9 @@ class V2CompetitionRosterPlayer(BaseModel):
     season_id: Optional[str] = None
     season_name: Optional[str] = None
     source_url: Optional[str] = None
-    performance_stats: list[V2PlayerPerformanceRow] = Field(default_factory=list)
+    performance_stats: List[V2PlayerPerformanceRow] = Field(default_factory=list)
     performance_error: Optional[str] = None
-    raw_roster_payload: dict[str, Any] = Field(default_factory=dict)
+    raw_roster_payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 class V2CompetitionRosterResponse(BaseModel):
@@ -51,6 +51,6 @@ class V2CompetitionRosterResponse(BaseModel):
     club_count: int = 0
     player_count: int = 0
     unique_player_count: int = 0
-    clubs: list[V2CompetitionRosterClub] = Field(default_factory=list)
-    players: list[V2CompetitionRosterPlayer] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
+    clubs: List[V2CompetitionRosterClub] = Field(default_factory=list)
+    players: List[V2CompetitionRosterPlayer] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
