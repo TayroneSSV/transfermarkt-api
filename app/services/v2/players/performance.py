@@ -308,7 +308,22 @@ class TransfermarktV2PlayerPerformance:
         return _aggregate_appearances(appearances)
 
     def get_performance(self) -> dict:
-        payload = self._load_ceapi_payload()
+        try:
+            payload = self._load_ceapi_payload()
+        except HTTPException as exc:
+            # CEAPI liefert für einzelne historische/seltene Spieler gelegentlich 404/405.
+            # Das darf einen Massenimport nicht abbrechen. Für den Einzel-Endpoint geben
+            # wir deshalb eine leere, aber gültige Response mit Fehlerhinweis zurück.
+            if exc.status_code in {404, 405}:
+                return {
+                    "tm_id": self.tm_id,
+                    "source_url": self.source_url,
+                    "loaded_at": datetime.now(),
+                    "performance_stats": [],
+                    "performance_error": exc.detail,
+                }
+            raise
+
         performance_stats = self._parse_payload(payload)
 
         return {
