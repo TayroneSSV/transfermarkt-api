@@ -28,7 +28,7 @@ def _season_name_from_id(season_id: Optional[Any]) -> Optional[str]:
     return f"{str(year)[-2:]}/{str(year + 1)[-2:]}"
 
 
-def _safe_max_workers(value: int, *, default: int = 6, upper_bound: int = 12) -> int:
+def _safe_max_workers(value: int, default: int = 6, upper_bound: int = 12) -> int:
     try:
         numeric = int(value)
     except (TypeError, ValueError):
@@ -43,16 +43,16 @@ def _extract_error_message(exc: Exception) -> str:
 
 
 def _club_players_source_url(club_id: str, season_id: Optional[str]) -> str:
-    return f"https://www.transfermarkt.com/-/kader/verein/{club_id}/saison_id/{season_id}/plus/1"
+    if season_id:
+        return f"https://www.transfermarkt.com/-/kader/verein/{club_id}/saison_id/{season_id}/plus/1"
+    return f"https://www.transfermarkt.com/-/kader/verein/{club_id}/plus/1"
 
 
 class TransfermarktV2CompetitionRoster:
     """Load a whole competition roster in one API call.
 
-    This service deliberately avoids calling this API's legacy HTTP endpoints
-    (/competitions/{id}/clubs and /clubs/{id}/players). It uses the underlying
-    Transfermarkt parser classes directly and can enrich players with the v2
-    CEAPI performance payload in parallel.
+    The global import path is: competition -> clubs -> club squads -> optional CEAPI performance.
+    Individual performance failures never abort the complete roster response.
     """
 
     def __init__(
@@ -67,7 +67,7 @@ class TransfermarktV2CompetitionRoster:
         self.season_id = _as_str(season_id)
         self.include_performance = bool(include_performance)
         self.max_workers = _safe_max_workers(max_workers)
-        self.performance_client = TransfermarktV2Client(timeout_seconds=20, max_retries=2, backoff_seconds=0.75)
+        self.performance_client = TransfermarktV2Client(timeout_seconds=20, max_retries=1, backoff_seconds=0.5)
 
     def _load_clubs(self) -> Dict[str, Any]:
         service = TransfermarktCompetitionClubs(
@@ -170,7 +170,8 @@ class TransfermarktV2CompetitionRoster:
             service = TransfermarktV2PlayerPerformance(tm_id=tm_id, client=self.performance_client)
             payload = service.get_performance()
             stats = payload.get("performance_stats", []) if isinstance(payload, dict) else []
-            return tm_id, stats if isinstance(stats, list) else [], None
+            error = payload.get("performance_error") if isinstance(payload, dict) else None
+            return tm_id, stats if isinstance(stats, list) else [], _as_str(error)
         except Exception as exc:
             return tm_id, [], _extract_error_message(exc)
 
