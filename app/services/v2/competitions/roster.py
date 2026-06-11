@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from app.services.v2.core.client import TransfermarktV2Client
 from app.services.v2.players.performance import TransfermarktV2PlayerPerformance
 
-TRANSFERMARKT_WEB_BASE_URL = "https://www.transfermarkt.de"
+TRANSFERMARKT_WEB_BASE_URL = "https://www.transfermarkt.com"
 
 # Wichtig: Transfermarkt akzeptiert fuer viele Seiten keinen '-' Platzhalter mehr.
 # Der Slug vor der Route muss realistisch sein, die eindeutige Wahrheit bleibt aber competition_id.
@@ -127,12 +127,23 @@ def _competition_url_candidates(competition_id: str, season_id: Optional[str]) -
     season = str(season_id or "").strip() or None
     slug = COMPETITION_SLUG_BY_ID.get(comp, comp.lower())
 
+    # Wichtig: Render bekam auf .de und auf alte /-/ URLs 405.
+    # Die funktionierende öffentliche Transfermarkt-Struktur ist aktuell .com + echter Wettbewerbsslug,
+    # z. B. https://www.transfermarkt.com/2-bundesliga/startseite/wettbewerb/L2
+    hosts = [
+        "https://www.transfermarkt.com",
+        "https://www.transfermarkt.us",
+        "https://www.transfermarkt.co.uk",
+    ]
+
     urls: List[str] = []
-    if season:
-        urls.append(f"{TRANSFERMARKT_WEB_BASE_URL}/{slug}/startseite/wettbewerb/{comp}/saison_id/{season}")
-        urls.append(f"{TRANSFERMARKT_WEB_BASE_URL}/{slug}/startseite/wettbewerb/{comp}?saison_id={season}")
-        urls.append(f"{TRANSFERMARKT_WEB_BASE_URL}/{slug}/startseite/wettbewerb/{comp}/plus/?saison_id={season}")
-    urls.append(f"{TRANSFERMARKT_WEB_BASE_URL}/{slug}/startseite/wettbewerb/{comp}")
+    for host in hosts:
+        # Current-season Seite zuerst. Für Saison 2025 ist das bei 25/26 die stabilste URL.
+        urls.append(f"{host}/{slug}/startseite/wettbewerb/{comp}")
+        if season:
+            urls.append(f"{host}/{slug}/startseite/wettbewerb/{comp}/saison_id/{season}")
+            urls.append(f"{host}/{slug}/startseite/wettbewerb/{comp}?saison_id={season}")
+            urls.append(f"{host}/{slug}/startseite/wettbewerb/{comp}/plus/1?saison_id={season}")
 
     deduped: List[str] = []
     for url in urls:
@@ -148,9 +159,11 @@ def _headers() -> Dict[str, str]:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/125.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
         "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
         "Referer": f"{TRANSFERMARKT_WEB_BASE_URL}/",
     }
 
@@ -320,7 +333,7 @@ def _parse_club_players(soup: BeautifulSoup, club: Dict[str, Any], competition_i
             "performance_stats": [],
             "performance_error": None,
             "raw_roster_payload": {
-                "source": "transfermarkt.de club roster detail page",
+                "source": "transfermarkt.com club roster detail page",
                 "player_url": urljoin(TRANSFERMARKT_WEB_BASE_URL, href),
                 "jersey_number": _cell_text(cells, 0),
                 "row_text": _clean_text(row.get_text(" ")),
